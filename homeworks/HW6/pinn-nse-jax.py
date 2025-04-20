@@ -12,7 +12,7 @@ import tqdm
 SEED = 5678
 key = jax.random.PRNGKey(SEED)
 rho = jnp.array(1.0)
-nu = jnp.array(0.4)
+nu = jnp.array(0.01)
 
 xrange = [0, 1]
 yrange = [0, 1]
@@ -52,7 +52,6 @@ def dataset_gen(n_slices=20):
     
     return x_col, y_col, x_bc, y_bc, u_bc, v_bc
 
-
 class PINN(eqx.Module):
     net: eqx.nn.MLP
     
@@ -73,7 +72,6 @@ class PINN(eqx.Module):
         psi = out[..., 0]
         p   = out[..., 1]
         return psi, p
-
 def residual_bc(model, x, y, u_bc, v_bc):
     psi_fn = lambda x, y: model(x, y)[0]
     p_fn   = lambda x, y: model(x, y)[1]
@@ -131,7 +129,11 @@ def loss_fn(model, dataset):
     res_bc  = jax.vmap(residual_bc,  (None, 0, 0, 0, 0), 0)(model, x_bc, y_bc, u_bc, v_bc)
     res_pde = jax.vmap(residual_pde, (None, 0, 0),       0)(model, x_col, y_col)
     
-    return jnp.mean(res_bc) + jnp.mean(res_pde)
+    p_pred = jax.vmap(lambda x, y: model(x, y)[1], (0, 0), 0)(x_col, y_col)
+    zero_mean_penalty = jnp.mean(p_pred)**2 
+    
+    return jnp.mean(res_bc) + jnp.mean(res_pde) # + 0.2 * zero_mean_penalty
+    
 
 def train(
     model: PINN,
@@ -170,12 +172,11 @@ dataset = dataset_gen(n_slices=20)
 n_epochs = 20000
 schedule = optax.piecewise_constant_schedule(
     init_value=1e-3,
-    boundaries_and_scales={2000: 0.1}
+    boundaries_and_scales={5000: 0.1}
 )
-optim = optax.adamw(schedule)
+optim = optax.adam(schedule)
 
 model = train(model, dataset, optim, n_epochs)
-
 
 # visualization
 
@@ -228,4 +229,3 @@ ax.set_title("Velocity (quiver) + Pressure (heat map)")
 
 plt.tight_layout()
 plt.show()
-    

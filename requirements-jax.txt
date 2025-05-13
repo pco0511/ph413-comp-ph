@@ -1,0 +1,6 @@
+jax[cuda12]
+optax
+equinox
+diffrax
+tqdm
+matplotlib

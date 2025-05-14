@@ -1,8 +1,8 @@
-# PH413 Comutational Physics 2025 Spring
+# PH413 Computational Physics 2025 Spring
 
 ## Setup
 
-### invironment for jax
+### environment using jax
 
 - Linux
 ```bash
@@ -19,7 +19,7 @@
 ```
 
 
-### invironment for pytorch
+### environment using pytorch
 - Linux
 ```bash
     python -m venv ph413-torch

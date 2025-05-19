@@ -1,82 +1,126 @@
-from functools import partial
-
-import jax
-import jax.numpy as jnp
-
-from jaxtyping import Array, Int, Float, PRNGKeyArray
-
 import tqdm
 
+import numpy as np
 import matplotlib.pyplot as plt
 
 
-
-@partial(
-    jax.jit, 
-    static_argnames=("width", "height", "margin", 
-                     "min_rad", "max_rad", "min_area",
-                     "max_area", "continue_prob")
-)
 def create_random_mask(
-    key: PRNGKeyArray,
-    width: int,
-    height: int,
-    margin: int,
-    min_rad: int,
-    max_rad: int,
+    dim0: int,
+    dim1: int,
+    min_dist_from_edge: int,
+    rand_circle_rad_min: int,
+    rand_circle_rad_max: int,
     min_area: int,
     max_area: int,
-    continue_prob: float
-):
+    continue_loop_prob: float,
+) -> np.ndarray:
+    '''
+    Generate a random 2‑D binary mask composed of overlapping circles.
+
+    Returns
+    -------
+    mask : np.ndarray
+        Binary image of shape (dim0, dim1) containing the generated mask.
+    '''
+    mask = np.zeros((dim0, dim1), dtype=np.uint8)
+
+    grid0, grid1 = np.meshgrid(np.arange(dim0), np.arange(dim1), indexing='ij')
+
+    # The object should be within this big circle to avoid edge artifacts
+    big_circle = (
+        (grid0 - dim0 / 2) ** 2 + (grid1 - dim1 / 2) ** 2
+    ) < (dim0 / 2 - min_dist_from_edge) ** 2
+
+    continue_flag = True
+    while continue_flag:
+        # Random center coordinates and radius for the new circle
+        rand_ind0 = np.random.randint(0, dim0)
+        rand_ind1 = np.random.randint(0, dim1)
+        rand_rad = np.random.randint(rand_circle_rad_min, rand_circle_rad_max)
+
+        # Create candidate circle
+        curr_circle = (
+            (grid0 - rand_ind0) ** 2 + (grid1 - rand_ind1) ** 2
+        ) < rand_rad ** 2
+
+        # Reject if any part of the candidate circle falls outside the big circle
+        if np.any(curr_circle & (~big_circle)):
+            continue
+
+        # Ensure connectivity: if the mask already has content, the new circle
+        # must overlap at least one existing pixel.
+        if mask.sum() > 0 and mask[rand_ind0, rand_ind1] == 0:
+            continue
+
+        # Add the circle to the mask
+        mask[curr_circle] = 1
+
+        # Decide whether to continue adding circles
+        current_area = mask.sum()
+        if current_area > min_area:
+            if np.random.uniform() > continue_loop_prob or current_area > max_area:
+                continue_flag = False
+
+    return mask
+
+
+def create_random_mask_optimized(
+    dim0: int,
+    dim1: int,
+    min_dist_from_edge: int,
+    rand_circle_rad_min: int,
+    rand_circle_rad_max: int,
+    min_area: int,
+    max_area: int,
+    continue_loop_prob: float,
+) -> np.ndarray:
     """
-    Generate a random connected-circle mask.
-    key            : PRNGKey
-    width, height : output height/width
-    margin         : min dist from edge
-    rmin, rmax     : circle radius range
-    amin, amax     : min/max mask area
-    continue_prob  : continue probability once amin is reached
+    Generate a random 2-D binary mask composed of overlapping circles,
+    optimized to avoid full-array operations on each iteration.
     """
-    i = jnp.arange(height)[:, None]
-    j = jnp.arange(width)[None, :]
-    r = (i - height / 2)**2 + (j - width / 2)**2
-    big_circle = r < (height / 2 - margin)**2
-    
-    # state = (mask, area, keep_going, key)
-    init = (jnp.zeros((height, width), jnp.uint8), 0, True, key)
-    
-    def cond(state):
-        return state[2]
-    
-    def body(state):
-        mask, area, _, key = state
-        key, key0, key1, key2, key3 = jax.random.split(key, 5)
+    mask = np.zeros((dim0, dim1), dtype=np.uint8)
 
-        # sample circle
-        ci = jax.random.randint(key0, (), 0, height)
-        cj = jax.random.randint(key1, (), 0, width)
-        cr = jax.random.randint(key2, (), min_rad, max_rad)
-        circle = (i - ci)**2 + (j - cj)**2 < cr**2
+    cy, cx = dim0 / 2, dim1 / 2
+    big_R = min(cy, cx) - min_dist_from_edge
 
-        # reject if outside big circle
-        bad = jnp.any(circle & (~big_circle))
+    current_area = 0
+    continue_flag = True
 
-        # require connectivity if non-empty
-        conn_ok = (area == 0) | (mask[ci, cj] == 1)
+    first = True
 
-        # decide add or skip
-        add = (~bad) & conn_ok
-        new_mask = jnp.where(add, mask | circle, mask)
+    while continue_flag:
+        r = np.random.randint(rand_circle_rad_min, rand_circle_rad_max)
 
-        # update area & continue flag
-        new_area = jnp.sum(new_mask)
-        cont = jnp.where(
-            new_area > min_area,
-            (jax.random.uniform(key3) < continue_prob) & (new_area < max_area),
-            True
-        )
+        if first:
+            valid = False
+            while not valid:
+                y = np.random.randint(int(cy - big_R + r), int(cy + big_R - r))
+                x = np.random.randint(int(cx - big_R + r), int(cx + big_R - r))
+                if (y - cy)**2 + (x - cx)**2 <= (big_R - r)**2:
+                    valid = True
+            first = False
+        else:
+            ys, xs = np.where(mask)
+            idx = np.random.randint(len(ys))
+            y0, x0 = ys[idx], xs[idx]
+            dy = np.random.randint(-r//2, r//2 + 1)
+            dx = np.random.randint(-r//2, r//2 + 1)
+            y = np.clip(y0 + dy, 0, dim0-1)
+            x = np.clip(x0 + dx, 0, dim1-1)
+            if (y - cy)**2 + (x - cx)**2 > (big_R - r)**2:
+                continue
 
-        return (new_mask, new_area, cont, key)
-    
-    mask_final, _, _, _ = jax.lax.while_loop(cond, body, init)
-    return mask_final
+        y1, y2 = max(0, y-r), min(dim0, y+r+1)
+        x1, x2 = max(0, x-r), min(dim1, x+r+1)
+        yy, xx = np.ogrid[y1:y2, x1:x2]
+        circle = (yy - y)**2 + (xx - x)**2 <= r**2
+
+        mask[y1:y2, x1:x2][circle] = 1
+
+        current_area = mask.sum()
+        
+        if current_area > min_area:
+            if np.random.rand() > continue_loop_prob or current_area > max_area:
+                continue_flag = False
+
+    return mask

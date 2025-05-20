@@ -54,10 +54,10 @@ class DoubleConvBlock(eqx.Module):
         state: eqx.nn.State
     ):
         x = self.conv_in(x)
-        # x, state = self.bn1(x, state)
+        x, state = self.bn1(x, state)
         x = self.activation(x)
         x = self.conv_out(x)
-        # x, state = self.bn2(x, state)
+        x, state = self.bn2(x, state)
         x = self.activation(x)
         return x, state
 
